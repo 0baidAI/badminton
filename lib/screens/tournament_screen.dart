@@ -15,6 +15,7 @@
 //
 //  3. Every completed match is saved to Match History automatically.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
@@ -475,21 +476,29 @@ class _TournamentScoringScreenState
     extends State<TournamentScoringScreen> {
   int _score1 = 0;
   int _score2 = 0;
-  int _server = 0; // 0 = team1 serves, 1 = team2 serves
+  int _server = 0;
   bool _gameOver = false;
   String? _winner;
   bool _dialogShown = false;
 
-  // Undo stack
+  // Flash message shown after each point
+  String? _flashMessage;
+  Color _flashColor = Colors.green;
+  Timer? _flashTimer;
+
   final List<Map<String, dynamic>> _history = [];
 
-  // ── Serve side: even score → Right, odd → Left ───────────────────────
+  @override
+  void dispose() {
+    _flashTimer?.cancel();
+    super.dispose();
+  }
+
   _ServeSide get _serveSide {
     final serverScore = _server == 0 ? _score1 : _score2;
     return serverScore % 2 == 0 ? _ServeSide.right : _ServeSide.left;
   }
 
-  // ── Win check ────────────────────────────────────────────────────────
   bool _isWinner(int my, int opp) {
     if (!widget.winBy2) return my >= widget.targetScore;
     final cap = widget.targetScore + 9;
@@ -497,28 +506,53 @@ class _TournamentScoringScreenState
     return my >= widget.targetScore && my - opp >= 2;
   }
 
+  void _showFlash(String message, Color color) {
+    _flashTimer?.cancel();
+    setState(() {
+      _flashMessage = message;
+      _flashColor = color;
+    });
+    _flashTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _flashMessage = null);
+    });
+  }
+
   // ── Score a point ─────────────────────────────────────────────────────
+  // RULE: Only change server when the RECEIVING team scores.
+  //       If the SERVING team scores → server stays the same.
   void _addPoint(int team) {
     if (_gameOver) return;
+
+    final serverBefore = _server;
+    final serverNameBefore =
+        _server == 0 ? widget.match.team1 : widget.match.team2;
+
     _history.add({
       's1': _score1, 's2': _score2,
       'server': _server, 'gameOver': _gameOver, 'winner': _winner,
     });
+
     setState(() {
-      final serverScored = team == _server;
       if (team == 0) _score1++; else _score2++;
-      if (!serverScored) _server = team;
+      // Only change server if the receiving team (not current server) scored
+      if (team != _server) _server = team;
       final my = team == 0 ? _score1 : _score2;
       final opp = team == 0 ? _score2 : _score1;
       if (_isWinner(my, opp)) {
         _gameOver = true;
-        _winner =
-            team == 0 ? widget.match.team1 : widget.match.team2;
+        _winner = team == 0 ? widget.match.team1 : widget.match.team2;
       }
     });
+
+    // Flash message AFTER state update
+    if (_server != serverBefore) {
+      final newName = _server == 0 ? widget.match.team1 : widget.match.team2;
+      _showFlash('🔄 Serve → $newName!', Colors.orange.shade700);
+    } else {
+      _showFlash('✅ $serverNameBefore keeps serve!', Colors.green.shade700);
+    }
   }
 
-  // ── Undo ──────────────────────────────────────────────────────────────
   void _undo() {
     if (_history.isEmpty) return;
     final prev = _history.removeLast();
@@ -529,6 +563,7 @@ class _TournamentScoringScreenState
       _gameOver = prev['gameOver'];
       _winner = prev['winner'];
       _dialogShown = false;
+      _flashMessage = null;
     });
   }
 

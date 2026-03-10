@@ -1,16 +1,6 @@
 // lib/screens/scoring_screen.dart
-//
-// ══════════════════════════════════════════════════════
-//  THE SCORING SCREEN — Main gameplay UI
-// ══════════════════════════════════════════════════════
-// Layout:
-//   [  Service Info Bar  ]   ← shows who is serving & from which side
-//   [         |         ]
-//   [ Team 1  |  Team 2 ]   ← tap LEFT side to score for team1
-//   [ Score   |  Score  ]     tap RIGHT side to score for team2
-//   [         |         ]
-//   [  Match Info Bar   ]   ← shows target, rules, mode
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
@@ -18,14 +8,75 @@ import '../providers/game_provider.dart';
 import '../providers/history_provider.dart';
 import '../models/match_model.dart';
 
-class ScoringScreen extends StatelessWidget {
+class ScoringScreen extends StatefulWidget {
   const ScoringScreen({super.key});
+
+  @override
+  State<ScoringScreen> createState() => _ScoringScreenState();
+}
+
+class _ScoringScreenState extends State<ScoringScreen> {
+  // Flash message shown briefly after each point
+  // e.g. "✓ Alice keeps serve!" or "🔄 Serve → Bob!"
+  String? _flashMessage;
+  Color _flashColor = Colors.green;
+  Timer? _flashTimer;
+
+  // Track the previous server so we can detect a change
+  int? _prevServer;
+
+  @override
+  void dispose() {
+    _flashTimer?.cancel();
+    super.dispose();
+  }
+
+  // Called after addPoint — shows a brief flash message
+  void _showFlash(String message, Color color) {
+    _flashTimer?.cancel();
+    setState(() {
+      _flashMessage = message;
+      _flashColor = color;
+    });
+    // Hide the message after 1.5 seconds
+    _flashTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _flashMessage = null);
+    });
+  }
+
+  // Tap handler: score a point and show appropriate flash
+  void _onTap(BuildContext context, int team) {
+    final game = context.read<GameProvider>();
+    if (game.gameOver) return;
+
+    // Remember who was serving BEFORE the point
+    final serverBefore = game.currentServer;
+    final serverNameBefore = game.currentServerName;
+
+    game.addPoint(team);
+
+    // Check if server changed AFTER the point
+    final serverAfter = game.currentServer;
+
+    if (serverAfter != serverBefore) {
+      // Service changed → receiving team scored
+      _showFlash(
+        '🔄 Serve → ${game.currentServerName}!',
+        Colors.orange.shade700,
+      );
+    } else {
+      // Server STAYS — serving team scored
+      _showFlash(
+        '✅ $serverNameBefore keeps serve!',
+        Colors.green.shade700,
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final game = context.watch<GameProvider>();
 
-    // When the game ends, show a winner dialog on the next frame
     if (game.gameOver) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _showWinnerDialog(context, game);
@@ -39,7 +90,6 @@ class ScoringScreen extends StatelessWidget {
         foregroundColor: Colors.white,
         title: const Text('Match'),
         actions: [
-          // Undo button
           IconButton(
             icon: const Icon(Icons.undo),
             tooltip: 'Undo Last Point',
@@ -49,40 +99,69 @@ class ScoringScreen extends StatelessWidget {
       ),
       body: Column(
         children: [
-          // ── Top bar: who is serving and from which side ────────────
+          // ── Service bar ──────────────────────────────────────────────
           _ServiceBar(game: game),
 
-          // ── Main area: two tappable score panels ───────────────────
+          // ── Flash message (briefly shown after each point) ───────────
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 250),
+            child: _flashMessage != null
+                ? Container(
+                    key: ValueKey(_flashMessage),
+                    width: double.infinity,
+                    color: _flashColor,
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    child: Text(
+                      _flashMessage!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  )
+                : const SizedBox(key: ValueKey('empty'), height: 0),
+          ),
+
+          // ── Split scoring panels ─────────────────────────────────────
           Expanded(
             child: Row(
               children: [
-                // LEFT side → Team 1 scores when tapped
+                // LEFT → Team 1
                 Expanded(
                   child: GestureDetector(
-                    onTap: game.gameOver ? null : () => game.addPoint(0),
+                    onTap: game.gameOver
+                        ? null
+                        : () => _onTap(context, 0),
                     child: _ScorePanel(
                       teamName: game.team1Name,
                       score: game.team1Score,
                       isServing: game.currentServer == 0,
-                      serveSide: game.currentServer == 0 ? game.serveSide : null,
+                      serveSide: game.currentServer == 0
+                          ? game.serveSide
+                          : null,
                       color: const Color(0xFF1B5E20),
                       alignment: Alignment.centerLeft,
                     ),
                   ),
                 ),
 
-                // Vertical divider between the two sides
                 Container(width: 2, color: Colors.white12),
 
-                // RIGHT side → Team 2 scores when tapped
+                // RIGHT → Team 2
                 Expanded(
                   child: GestureDetector(
-                    onTap: game.gameOver ? null : () => game.addPoint(1),
+                    onTap: game.gameOver
+                        ? null
+                        : () => _onTap(context, 1),
                     child: _ScorePanel(
                       teamName: game.team2Name,
                       score: game.team2Score,
                       isServing: game.currentServer == 1,
-                      serveSide: game.currentServer == 1 ? game.serveSide : null,
+                      serveSide: game.currentServer == 1
+                          ? game.serveSide
+                          : null,
                       color: const Color(0xFF0D47A1),
                       alignment: Alignment.centerRight,
                     ),
@@ -92,23 +171,21 @@ class ScoringScreen extends StatelessWidget {
             ),
           ),
 
-          // ── Bottom info bar ─────────────────────────────────────────
+          // ── Bottom info bar ──────────────────────────────────────────
           _BottomBar(game: game),
         ],
       ),
     );
   }
 
-  // Show winner dialog when match is over
   void _showWinnerDialog(BuildContext context, GameProvider game) {
-    // Check if dialog is already showing (avoid duplicates)
     if (!context.mounted) return;
-
     showDialog(
       context: context,
-      barrierDismissible: false, // User must press a button
+      barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('🏆 Match Over!',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 24)),
@@ -130,24 +207,25 @@ class ScoringScreen extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 52,
                     fontWeight: FontWeight.bold,
-                    color: game.currentServer == 0
+                    color: game.winnerName == game.team1Name
                         ? Colors.green
-                        : Colors.white54,
+                        : Colors.white38,
                   ),
                 ),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 12),
                   child: Text('—',
-                      style: TextStyle(fontSize: 32, color: Colors.grey)),
+                      style:
+                          TextStyle(fontSize: 32, color: Colors.grey)),
                 ),
                 Text(
                   '${game.team2Score}',
                   style: TextStyle(
                     fontSize: 52,
                     fontWeight: FontWeight.bold,
-                    color: game.currentServer == 1
+                    color: game.winnerName == game.team2Name
                         ? Colors.blue
-                        : Colors.white54,
+                        : Colors.white38,
                   ),
                 ),
               ],
@@ -156,17 +234,15 @@ class ScoringScreen extends StatelessWidget {
         ),
         actionsAlignment: MainAxisAlignment.spaceEvenly,
         actions: [
-          // Exit → save match and go back to home
           TextButton.icon(
             icon: const Icon(Icons.home),
             label: const Text('Save & Exit'),
             onPressed: () {
               _saveMatch(context, game);
               Navigator.of(dialogContext).pop();
-              Navigator.of(context).pop(); // Back to setup screen
+              Navigator.of(context).pop();
             },
           ),
-          // Play Again → reset scores, same players
           ElevatedButton.icon(
             icon: const Icon(Icons.replay),
             label: const Text('Play Again'),
@@ -185,7 +261,6 @@ class ScoringScreen extends StatelessWidget {
     );
   }
 
-  // Save completed match to history
   void _saveMatch(BuildContext context, GameProvider game) {
     if (!context.mounted) return;
     context.read<HistoryProvider>().addMatch(MatchModel(
@@ -198,38 +273,85 @@ class ScoringScreen extends StatelessWidget {
           dateTime: DateTime.now(),
           targetScore: game.targetScore,
           winBy2: game.winBy2,
-          matchMode:
-              game.matchMode == MatchMode.singles ? 'singles' : 'doubles',
+          matchMode: game.matchMode == MatchMode.singles
+              ? 'singles'
+              : 'doubles',
         ));
   }
 }
 
-// ── Service Bar ────────────────────────────────────────────────────────────
-// Shows: who is serving | which court side | serve side indicator
+// ════════════════════════════════════════════════════════════════════════════
+//  SERVICE BAR — Shows clearly WHO is serving and from which side
+// ════════════════════════════════════════════════════════════════════════════
 class _ServiceBar extends StatelessWidget {
   final GameProvider game;
   const _ServiceBar({required this.game});
 
   @override
   Widget build(BuildContext context) {
-    final side =
-        game.serveSide == ServeSide.right ? 'Right ▶' : '◀ Left';
+    final serverName = game.currentServerName;
+    final isRight = game.serveSide == ServeSide.right;
+    final sideText = isRight ? 'Right side ▶' : '◀ Left side';
+
     return Container(
-      color: const Color(0xFF2E7D32),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      color: const Color(0xFF1B5E20),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text('🏸', style: TextStyle(fontSize: 18)),
-          const SizedBox(width: 8),
-          Flexible(
+          // Shuttlecock icon
+          const Text('🏸', style: TextStyle(fontSize: 22)),
+          const SizedBox(width: 10),
+
+          // Server name — this is the MOST important thing to see clearly
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // WHO is serving
+                RichText(
+                  text: TextSpan(
+                    children: [
+                      const TextSpan(
+                        text: 'Server: ',
+                        style: TextStyle(
+                            color: Colors.white60, fontSize: 12),
+                      ),
+                      TextSpan(
+                        text: serverName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // WHERE they serve from
+                Text(
+                  sideText,
+                  style: const TextStyle(
+                      color: Colors.white54, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+
+          // Serve side pill badge (right or left)
+          Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.yellow.shade700,
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Text(
-              'Serving: ${game.currentServerName}  ·  Side: $side',
+              isRight ? '▶ RIGHT' : 'LEFT ◀',
               style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14),
-              textAlign: TextAlign.center,
+                color: Colors.black87,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
             ),
           ),
         ],
@@ -238,12 +360,14 @@ class _ServiceBar extends StatelessWidget {
   }
 }
 
-// ── Score Panel (one side of the court) ────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  SCORE PANEL
+// ════════════════════════════════════════════════════════════════════════════
 class _ScorePanel extends StatelessWidget {
   final String teamName;
   final int score;
   final bool isServing;
-  final ServeSide? serveSide; // Only set if this team is serving
+  final ServeSide? serveSide;
   final Color color;
   final Alignment alignment;
 
@@ -258,19 +382,18 @@ class _ScorePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Serving team is brighter; receiving team is dimmed
-    final panelColor = isServing ? color : color.withOpacity(0.35);
+    final panelColor =
+        isServing ? color : color.withOpacity(0.35);
 
     return Container(
       color: panelColor,
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // ── Main content: name + score ────────────────────────────
           Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Team/Player name
+              // Team name
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
@@ -286,7 +409,7 @@ class _ScorePanel extends StatelessWidget {
               ),
               const SizedBox(height: 8),
 
-              // SCORE — big number
+              // Big score number
               Text(
                 '$score',
                 style: const TextStyle(
@@ -296,48 +419,70 @@ class _ScorePanel extends StatelessWidget {
                     height: 1.0),
               ),
 
-              // "SERVING" badge
+              // SERVING badge — only visible on the serving team's panel
               if (isServing) ...[
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 4),
+                      horizontal: 14, vertical: 5),
                   decoration: BoxDecoration(
                     color: Colors.yellow.shade700,
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: const Text(
-                    '🏸 SERVING',
+                    '🏸  SERVING',
                     style: TextStyle(
-                        color: Colors.black87,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13),
+                      color: Colors.black87,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+
+              // Dimmed "RECEIVING" badge on the non-serving side
+              if (!isServing) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text(
+                    'RECEIVING',
+                    style: TextStyle(
+                      color: Colors.white30,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],
             ],
           ),
 
-          // ── "TAP TO SCORE" hint at the top ───────────────────────
+          // "TAP TO SCORE" hint
           Positioned(
             top: 16,
             child: Text(
               'TAP TO SCORE',
               style: TextStyle(
-                  color: Colors.white.withOpacity(0.25), fontSize: 11),
+                  color: Colors.white.withOpacity(0.2),
+                  fontSize: 11),
             ),
           ),
 
-          // ── Serve-side indicator dot (bottom corner) ─────────────
+          // Serve-side dot — only on serving team's panel
           if (isServing && serveSide != null)
             Positioned(
               bottom: 20,
-              // Position based on: which side is this panel? + which side to serve from?
-              left: _showOnLeft(alignment, serveSide!) ? 12 : null,
-              right: _showOnLeft(alignment, serveSide!) ? null : 12,
+              left: _showDotOnLeft(alignment, serveSide!) ? 12 : null,
+              right: _showDotOnLeft(alignment, serveSide!) ? null : 12,
               child: Container(
-                width: 40,
-                height: 40,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   color: Colors.yellow.withOpacity(0.85),
                   shape: BoxShape.circle,
@@ -345,7 +490,7 @@ class _ScorePanel extends StatelessWidget {
                 child: Center(
                   child: Text(
                     serveSide == ServeSide.right ? '▶' : '◀',
-                    style: const TextStyle(fontSize: 20),
+                    style: const TextStyle(fontSize: 18),
                   ),
                 ),
               ),
@@ -355,18 +500,15 @@ class _ScorePanel extends StatelessWidget {
     );
   }
 
-  // Should the indicator dot appear on the LEFT of this panel?
-  bool _showOnLeft(Alignment panelAlignment, ServeSide side) {
-    // For Team 1 (left panel): right serve = right side of panel = right edge
+  bool _showDotOnLeft(Alignment panelAlignment, ServeSide side) {
     if (panelAlignment == Alignment.centerLeft) {
       return side == ServeSide.left;
     }
-    // For Team 2 (right panel): right serve = left side of panel (closer to net)
     return side == ServeSide.right;
   }
 }
 
-// ── Bottom Info Bar ─────────────────────────────────────────────────────────
+// ── Bottom info bar ──────────────────────────────────────────────────────────
 class _BottomBar extends StatelessWidget {
   final GameProvider game;
   const _BottomBar({required this.game});
@@ -375,22 +517,23 @@ class _BottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFF1A2F1A),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      padding:
+          const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _infoChip('🎯 Target: ${game.targetScore}'),
-          _infoChip(game.winBy2 ? '⚖️ Win by 2' : '🚫 No deuce'),
-          _infoChip(
-              game.matchMode == MatchMode.singles ? '👤 Singles' : '👥 Doubles'),
+          _chip('🎯 Target: ${game.targetScore}'),
+          _chip(game.winBy2 ? '⚖️ Win by 2' : '🚫 No deuce'),
+          _chip(game.matchMode == MatchMode.singles
+              ? '👤 Singles'
+              : '👥 Doubles'),
         ],
       ),
     );
   }
 
-  Widget _infoChip(String text) => Text(
+  Widget _chip(String text) => Text(
         text,
-        style:
-            const TextStyle(color: Colors.white54, fontSize: 13),
+        style: const TextStyle(color: Colors.white54, fontSize: 13),
       );
 }
